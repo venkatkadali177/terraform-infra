@@ -33,6 +33,7 @@ resource "aws_route" "public_internet_access" {
 resource "aws_subnet" "public_1" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnet_cidrs[0]
+  availability_zone       = "ap-south-1a"
   map_public_ip_on_launch = true
 
   tags = {
@@ -44,6 +45,7 @@ resource "aws_subnet" "public_2" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnet_cidrs[1]
   map_public_ip_on_launch = true
+  availability_zone       = "ap-south-1b"
 
   tags = {
     Name = "${var.environment}-public-subnet-2"
@@ -51,8 +53,9 @@ resource "aws_subnet" "public_2" {
 }
 
 resource "aws_subnet" "private_1" {
-  vpc_id     = aws_vpc.main.id
-  cidr_block = var.private_subnet_cidrs[0]
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = var.private_subnet_cidrs[0]
+  availability_zone = "ap-south-1a"
 
   tags = {
     Name = "${var.environment}-private-subnet-1"
@@ -60,8 +63,9 @@ resource "aws_subnet" "private_1" {
 }
 
 resource "aws_subnet" "private_2" {
-  vpc_id     = aws_vpc.main.id
-  cidr_block = var.private_subnet_cidrs[1]
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = var.private_subnet_cidrs[1]
+  availability_zone = "ap-south-1b"
 
   tags = {
     Name = "${var.environment}-private-subnet-2"
