@@ -1,5 +1,9 @@
+locals {
+  bucket_set = toset(var.bucket_names)
+}
+
 resource "aws_s3_bucket" "buckets" {
-  for_each = toset(var.bucket_names)
+  for_each = local.bucket_set
 
   bucket = each.value
 
@@ -9,9 +13,9 @@ resource "aws_s3_bucket" "buckets" {
 }
 
 resource "aws_s3_bucket_versioning" "versioning" {
-  for_each = aws_s3_bucket.buckets
+  for_each = local.bucket_set
 
-  bucket = each.value.id
+  bucket = aws_s3_bucket.buckets[each.key].id
 
   versioning_configuration {
     status = "Enabled"
