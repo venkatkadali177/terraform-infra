@@ -6,10 +6,19 @@ variable "vpc_cidr" {
   type = string
 }
 
-variable "public_subnet_cidrs" {
-  type = list(string)
+variable "public_subnets" {
+  type = map(object({
+    cidr = string
+    az   = string
+  }))
 }
 
-variable "private_subnet_cidrs" {
+variable "private_subnets" {
+  type = map(object({
+    cidr = string
+    az   = string
+  }))
+}
+variable "bucket_names" {
   type = list(string)
 }
