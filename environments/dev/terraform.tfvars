@@ -27,7 +27,7 @@ private_subnets = {
 }
 
 bucket_names = [
-  "artifacts-dev",
-  "logs-dev",
-  "backup-dev"
+  "artifacts-388439400978-dev",
+  "logs-388439400978-dev",
+  "backup-388439400978-dev"
 ]
