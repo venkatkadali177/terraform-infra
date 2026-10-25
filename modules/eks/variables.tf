@@ -12,5 +12,5 @@ variable "private_subnet_ids" {
 
 variable "node_instance_types" {
   type    = list(string)
-  default = ["t3.micro"]
+  default = ["t3.medium"]
 }
