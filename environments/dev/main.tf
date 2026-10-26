@@ -5,6 +5,8 @@ module "vpc" {
   vpc_cidr        = var.vpc_cidr
   public_subnets  = var.public_subnets
   private_subnets = var.private_subnets
+
+  cluster_name = "${var.project_name}-${var.environment}-eks"
 }
 
 module "backend" {
@@ -14,7 +16,8 @@ module "backend" {
 module "eks" {
   source = "../../modules/eks"
 
-  cluster_name       = "dev-eks"
+  cluster_name       = "${var.project_name}-${var.environment}-eks"
+  eks_version        = var.eks_version
   vpc_id             = module.vpc.vpc_id
   private_subnet_ids = module.vpc.private_subnet_ids
 }
