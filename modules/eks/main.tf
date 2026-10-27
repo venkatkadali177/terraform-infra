@@ -115,7 +115,10 @@ resource "aws_eks_node_group" "node_group" {
     max_size     = var.max_size
   }
 
-  instance_types = var.node_instance_types
+  launch_template {
+    id      = aws_launch_template.eks_nodes.id
+    version = "$Latest"
+  }
 
   depends_on = [
     aws_iam_role_policy_attachment.worker_node_policy,

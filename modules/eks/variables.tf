@@ -54,4 +54,11 @@ variable "max_size" {
   default = 4
 }
 
+variable "public_access_cidrs" {
+  type = list(string)
+
+  default = [
+    "0.0.0.0/0"
+  ]
+}
 
