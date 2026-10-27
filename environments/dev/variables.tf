@@ -34,3 +34,14 @@ variable "project_name" {
 variable "eks_version" {
   type = string
 }
+variable "desired_size" {
+  type = number
+}
+
+variable "min_size" {
+  type = number
+}
+
+variable "max_size" {
+  type = number
+}

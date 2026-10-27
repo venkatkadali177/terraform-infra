@@ -1,17 +1,5 @@
 resource "aws_launch_template" "eks_nodes" {
-  name_prefix   = "${var.cluster_name}-lt-"
-  image_id      = data.aws_ami.eks_node.id
-  instance_type = var.node_instance_types[0]
-
-  vpc_security_group_ids = [
-    aws_security_group.node_sg.id
-  ]
-
-  user_data = base64encode(
-    templatefile("${path.module}/userdata.sh", {
-      cluster_name = var.cluster_name
-    })
-  )
+  name_prefix = "${var.cluster_name}-lt-"
 
   tag_specifications {
     resource_type = "instance"

@@ -33,3 +33,9 @@ bucket_names = [
   "logs-388439400978-dev",
   "backup-388439400978-dev"
 ]
+project_name = "sri"
+eks_version  = "1.36"
+
+desired_size = 3
+min_size     = 2
+max_size     = 4
