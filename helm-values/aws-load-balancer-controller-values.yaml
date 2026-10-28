@@ -1,0 +1,11 @@
+clusterName: sri-dev-eks
+
+serviceAccount:
+  create: false
+  name: aws-load-balancer-controller
+
+replicaCount: 2
+
+region: ap-south-1
+
+vpcId: vpc-0c09900daace4e8cf

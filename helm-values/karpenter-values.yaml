@@ -1,0 +1,4 @@
+replicas: 2
+
+settings:
+  clusterName: sri-dev-eks
