@@ -53,7 +53,7 @@ resource "aws_eks_cluster" "cluster" {
   version = var.eks_version
 
   enabled_cluster_log_types = var.cluster_log_types
-   access_config {
+  access_config {
     authentication_mode                         = "API_AND_CONFIG_MAP"
     bootstrap_cluster_creator_admin_permissions = true
   }
@@ -111,7 +111,9 @@ resource "aws_eks_node_group" "node_group" {
   node_group_name = "${var.cluster_name}-node-group"
   node_role_arn   = aws_iam_role.node_role.arn
 
-  subnet_ids = var.private_subnet_ids
+  subnet_ids     = var.private_subnet_ids
+  instance_types = var.node_instance_types
+
 
   scaling_config {
     desired_size = var.desired_size
@@ -119,10 +121,10 @@ resource "aws_eks_node_group" "node_group" {
     max_size     = var.max_size
   }
 
-  launch_template {
-    id      = aws_launch_template.eks_nodes.id
-    version = "$Latest"
-  }
+  # launch_template {
+  #   id      = aws_launch_template.eks_nodes.id
+  #   version = "$Latest"
+  # }
 
   depends_on = [
     aws_iam_role_policy_attachment.worker_node_policy,

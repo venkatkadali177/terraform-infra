@@ -17,7 +17,7 @@ variable "vpc_id" {
 
 variable "node_instance_types" {
   type    = list(string)
-  default = ["t3.micro"]
+  default = ["t3.small"]
 }
 
 variable "endpoint_private_access" {
@@ -51,7 +51,7 @@ variable "min_size" {
 }
 
 variable "max_size" {
-  type = number 
+  type = number
 }
 
 variable "public_access_cidrs" {
