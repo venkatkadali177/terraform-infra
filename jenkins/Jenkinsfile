@@ -1,0 +1,66 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(
+            name: 'AWS_REGION',
+            defaultValue: 'ap-south-1',
+            description: 'AWS Region'
+        )
+
+        string(
+            name: 'AWS_ACCOUNT_ID',
+            defaultValue: '388439400978',
+            description: 'AWS Account ID'
+        )
+
+        string(
+            name: 'REPO_NAME',
+            defaultValue: 'sample-app',
+            description: 'ECR Repository Name'
+        )
+
+        string(
+            name: 'GIT_BRANCH',
+            defaultValue: 'main',
+            description: 'Git Branch'
+        )
+    }
+
+    environment {
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        ECR_REPO = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.REPO_NAME}"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git(
+                    branch: "${params.GIT_BRANCH}",
+                    credentialsId: 'github-creds',
+                    url: 'https://github.com/venkatkadali177/terraform-infra.git'
+                )
+            }
+        }
+
+        stage('Verify Workspace') {
+            steps {
+                sh 'pwd'
+                sh 'ls -la'
+            }
+        }
+
+        stage('Build') {
+            steps {
+                echo "Building Image: ${ECR_REPO}:${IMAGE_TAG}"
+            }
+        }
+
+        stage('Push') {
+            steps {
+                echo "Push to ECR will be implemented after image builder setup"
+            }
+        }
+    }
+}
