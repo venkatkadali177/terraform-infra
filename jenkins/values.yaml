@@ -1,0 +1,26 @@
+controller:
+  admin:
+    createSecret: true
+
+  serviceType: ClusterIP
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+
+  installPlugins:
+    - kubernetes
+    - workflow-aggregator
+    - git
+    - docker-workflow
+    - credentials-binding
+    - pipeline-stage-view
+
+persistence:
+  enabled: true
+  storageClass: gp2
+  size: 10Gi
