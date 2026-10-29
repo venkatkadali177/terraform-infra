@@ -1,7 +1,25 @@
 pipeline {
     agent any
 
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
     parameters {
+        string(
+            name: 'REPOSITORY_URL',
+            defaultValue: 'https://github.com/venkatkadali177/terraform-infra.git',
+            description: 'Git Repository URL'
+        )
+
+        string(
+            name: 'GIT_BRANCH',
+            defaultValue: 'main',
+            description: 'Git Branch'
+        )
+
         string(
             name: 'AWS_REGION',
             defaultValue: 'ap-south-1',
@@ -19,48 +37,117 @@ pipeline {
             defaultValue: 'sample-app',
             description: 'ECR Repository Name'
         )
-
-        string(
-            name: 'GIT_BRANCH',
-            defaultValue: 'main',
-            description: 'Git Branch'
-        )
     }
 
     environment {
+        APP_SOURCE_PATH = 'sample-app-source'
+        HELM_CHART_PATH = 'helm-charts/sample-app'
+
         IMAGE_TAG = "${BUILD_NUMBER}"
+
         ECR_REPO = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.REPO_NAME}"
     }
 
     stages {
 
-        stage('Checkout') {
+        stage('Checkout Source') {
             steps {
                 git(
                     branch: "${params.GIT_BRANCH}",
                     credentialsId: 'github-creds',
-                    url: 'https://github.com/venkatkadali177/terraform-infra.git'
+                    url: "${params.REPOSITORY_URL}"
                 )
             }
         }
 
-        stage('Verify Workspace') {
+        stage('Validate Source') {
             steps {
                 sh 'pwd'
                 sh 'ls -la'
+                sh "ls -la ${APP_SOURCE_PATH}"
             }
         }
 
-        stage('Build') {
+        stage('Prepare Build Variables') {
             steps {
-                echo "Building Image: ${ECR_REPO}:${IMAGE_TAG}"
+                script {
+                    echo "Repository : ${ECR_REPO}"
+                    echo "Image Tag  : ${IMAGE_TAG}"
+                    echo "Region     : ${params.AWS_REGION}"
+                }
             }
         }
 
-        stage('Push') {
+        stage('Build Docker Image') {
             steps {
-                echo "Push to ECR will be implemented after image builder setup"
+                echo "Building image ${ECR_REPO}:${IMAGE_TAG}"
+
+                /*
+                docker build \
+                -t ${ECR_REPO}:${IMAGE_TAG} \
+                ${APP_SOURCE_PATH}
+                */
             }
+        }
+
+        stage('Push Image To ECR') {
+            steps {
+                echo "Push image to ECR"
+
+                /*
+                aws ecr get-login-password \
+                --region ${params.AWS_REGION} | \
+                docker login \
+                --username AWS \
+                --password-stdin \
+                ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
+
+                docker push ${ECR_REPO}:${IMAGE_TAG}
+                */
+            }
+        }
+
+        stage('Update Helm Values') {
+            steps {
+                echo "Update image tag in values.yaml"
+
+                /*
+                sed -i "s/tag:.*/tag: ${IMAGE_TAG}/" \
+                ${HELM_CHART_PATH}/values.yaml
+                */
+            }
+        }
+
+        stage('Commit GitOps Changes') {
+            steps {
+                echo "Commit and push updated values.yaml"
+
+                /*
+                git add .
+                git commit -m "ci: update image tag ${IMAGE_TAG}"
+                git push origin ${params.GIT_BRANCH}
+                */
+            }
+        }
+
+        stage('Deploy Through ArgoCD') {
+            steps {
+                echo "ArgoCD will automatically detect Git changes and sync"
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline completed successfully'
+        }
+
+        failure {
+            echo 'Pipeline failed'
+        }
+
+        always {
+            cleanWs()
         }
     }
 }
