@@ -1,0 +1,9 @@
+serviceAccount:
+  create: false
+  name: karpenter
+
+settings:
+  clusterName: sri-dev-eks
+  clusterEndpoint: "https://A7F3FD136521E1EFD8F9FE6898BAF846.gr7.ap-south-1.eks.amazonaws.com"
+
+replicas: 2

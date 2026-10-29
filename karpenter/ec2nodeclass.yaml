@@ -1,0 +1,20 @@
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  role: sri-dev-eks-node-role
+
+  amiFamily: AL2023
+
+  subnetSelectorTerms:
+    - id: subnet-02a1e8d7c611281e9
+    - id: subnet-055cacc549dc0d48e
+    - id: subnet-026b66641f3815c93
+    - id: subnet-0cb9f518492445158
+
+  securityGroupSelectorTerms:
+    - id: sg-0119915ce89f3d312
+
+  amiSelectorTerms:
+    - id: ami-08169decbdfa2724f
