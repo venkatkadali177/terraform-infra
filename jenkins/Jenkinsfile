@@ -3,6 +3,7 @@ pipeline {
 
     options {
         timestamps()
+        disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timeout(time: 30, unit: 'MINUTES')
     }
@@ -42,7 +43,6 @@ pipeline {
     environment {
         APP_SOURCE_PATH = 'sample-app-source'
         HELM_CHART_PATH = 'helm-charts/sample-app'
-
         IMAGE_TAG = "${BUILD_NUMBER}"
 
         ECR_REPO = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.REPO_NAME}"
@@ -53,86 +53,64 @@ pipeline {
         stage('Checkout Source') {
             steps {
                 git(
-                    branch: "${params.GIT_BRANCH}",
+                    branch: params.GIT_BRANCH,
                     credentialsId: 'github-creds',
-                    url: "${params.REPOSITORY_URL}"
+                    url: params.REPOSITORY_URL
                 )
             }
         }
 
-        stage('Validate Source') {
+        stage('Validate Repository') {
             steps {
                 sh 'pwd'
                 sh 'ls -la'
+            }
+        }
+
+        stage('Validate Application Source') {
+            steps {
                 sh "ls -la ${APP_SOURCE_PATH}"
             }
         }
 
-        stage('Prepare Build Variables') {
+        stage('Prepare Build Metadata') {
             steps {
-                script {
-                    echo "Repository : ${ECR_REPO}"
-                    echo "Image Tag  : ${IMAGE_TAG}"
-                    echo "Region     : ${params.AWS_REGION}"
-                }
+                echo "AWS Region  : ${params.AWS_REGION}"
+                echo "AWS Account : ${params.AWS_ACCOUNT_ID}"
+                echo "ECR Repo    : ${ECR_REPO}"
+                echo "Image Tag   : ${IMAGE_TAG}"
+                echo "Branch      : ${params.GIT_BRANCH}"
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                echo "Building image ${ECR_REPO}:${IMAGE_TAG}"
-
-                /*
-                docker build \
-                -t ${ECR_REPO}:${IMAGE_TAG} \
-                ${APP_SOURCE_PATH}
-                */
+                echo "Docker build stage"
+                echo "Image: ${ECR_REPO}:${IMAGE_TAG}"
             }
         }
 
-        stage('Push Image To ECR') {
+        stage('Push To ECR') {
             steps {
-                echo "Push image to ECR"
-
-                /*
-                aws ecr get-login-password \
-                --region ${params.AWS_REGION} | \
-                docker login \
-                --username AWS \
-                --password-stdin \
-                ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
-
-                docker push ${ECR_REPO}:${IMAGE_TAG}
-                */
+                echo "ECR push stage"
             }
         }
 
         stage('Update Helm Values') {
             steps {
-                echo "Update image tag in values.yaml"
-
-                /*
-                sed -i "s/tag:.*/tag: ${IMAGE_TAG}/" \
-                ${HELM_CHART_PATH}/values.yaml
-                */
+                echo "Helm values update stage"
             }
         }
 
-        stage('Commit GitOps Changes') {
+        stage('GitOps Commit') {
             steps {
-                echo "Commit and push updated values.yaml"
-
-                /*
-                git add .
-                git commit -m "ci: update image tag ${IMAGE_TAG}"
-                git push origin ${params.GIT_BRANCH}
-                */
+                echo "GitOps commit stage"
             }
         }
 
-        stage('Deploy Through ArgoCD') {
+        stage('ArgoCD Deployment') {
             steps {
-                echo "ArgoCD will automatically detect Git changes and sync"
+                echo "ArgoCD auto-sync stage"
             }
         }
     }
