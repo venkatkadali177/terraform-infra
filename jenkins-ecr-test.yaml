@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: jenkins-ecr-test
+  namespace: jenkins
+spec:
+  serviceAccountName: jenkins
+  restartPolicy: Never
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["aws"]
+      args:
+        - ecr
+        - get-authorization-token
+        - --region
+        - ap-south-1
+        - --query
+        - authorizationData[0].proxyEndpoint
+        - --output
+        - text
