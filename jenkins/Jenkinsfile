@@ -1,5 +1,42 @@
-pipeline {
-    agent any
+﻿pipeline {
+    agent {
+        kubernetes {
+            cloud 'kubernetes'
+            defaultContainer 'aws-cli'
+            yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sh", "-c", "cat"]
+      tty: true
+      volumeMounts:
+        - name: ecr-docker-config
+          mountPath: /kaniko/.docker
+        - name: workspace-volume
+          mountPath: /home/jenkins/agent
+
+    - name: kaniko
+      image: gcr.io/kaniko-project/executor:v1.23.2-debug
+      command: ["/busybox/sh", "-c", "cat"]
+      tty: true
+      volumeMounts:
+        - name: ecr-docker-config
+          mountPath: /kaniko/.docker
+        - name: workspace-volume
+          mountPath: /home/jenkins/agent
+
+  volumes:
+    - name: ecr-docker-config
+      emptyDir: {}
+    - name: workspace-volume
+      emptyDir: {}
+'''
+        }
+    }
 
     options {
         disableConcurrentBuilds()
@@ -8,123 +45,231 @@ pipeline {
     }
 
     parameters {
-        string(
-            name: 'REPOSITORY_URL',
-            defaultValue: 'https://github.com/venkatkadali177/terraform-infra.git',
-            description: 'Git Repository URL'
-        )
-
-        string(
-            name: 'GIT_BRANCH',
-            defaultValue: 'main',
-            description: 'Git Branch'
-        )
-
-        string(
-            name: 'AWS_REGION',
-            defaultValue: 'ap-south-1',
-            description: 'AWS Region'
-        )
-
-        string(
-            name: 'AWS_ACCOUNT_ID',
-            defaultValue: '388439400978',
-            description: 'AWS Account ID'
-        )
-
-        string(
-            name: 'REPO_NAME',
-            defaultValue: 'sample-app',
-            description: 'ECR Repository Name'
-        )
+        string(name: 'AWS_REGION', defaultValue: 'ap-south-1')
+        string(name: 'AWS_ACCOUNT_ID', defaultValue: '388439400978')
+        string(name: 'REPO_NAME', defaultValue: 'sample-app')
+        string(name: 'GIT_BRANCH', defaultValue: 'main')
     }
 
     environment {
         APP_SOURCE_PATH = 'sample-app-source'
-        HELM_CHART_PATH = 'helm-charts/sample-app'
-        IMAGE_TAG = "${BUILD_NUMBER}"
-
+        HELM_VALUES_FILE = 'helm-charts/sample-app/values.yaml'
+        ECR_REGISTRY = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com"
         ECR_REPO = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.REPO_NAME}"
     }
 
     stages {
 
-        stage('Checkout Source') {
+        stage('1. Checkout GitHub') {
             steps {
-                git(
-                    branch: params.GIT_BRANCH,
-                    credentialsId: 'github-creds',
-                    url: params.REPOSITORY_URL
-                )
+                container('jnlp') {
+                    checkout scm
+
+                    script {
+                        env.GIT_COMMIT_SHORT = sh(
+                            script: 'git rev-parse --short=8 HEAD',
+                            returnStdout: true
+                        ).trim()
+
+                        env.IMAGE_TAG = "${BUILD_NUMBER}-${env.GIT_COMMIT_SHORT}"
+
+                        env.COMMIT_MESSAGE = sh(
+                            script: 'git log -1 --pretty=%s',
+                            returnStdout: true
+                        ).trim()
+
+                        env.SKIP_PIPELINE =
+                            env.COMMIT_MESSAGE.contains('[skip ci]') ? 'true' : 'false'
+
+                        echo "Commit: ${env.GIT_COMMIT_SHORT}"
+                        echo "Image tag: ${env.IMAGE_TAG}"
+                    }
+                }
             }
         }
 
-        stage('Validate Repository') {
+        stage('2. Validate Application') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
             steps {
-                sh 'pwd'
-                sh 'ls -la'
+                container('jnlp') {
+                    sh '''
+                        set -eu
+                        test -f sample-app-source/index.html
+                        test -f sample-app-source/Dockerfile
+                        test -f helm-charts/sample-app/values.yaml
+                        echo "Application validation successful"
+                    '''
+                }
             }
         }
 
-        stage('Validate Application Source') {
+        stage('3. AWS ECR Authentication') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
             steps {
-                sh "ls -la ${APP_SOURCE_PATH}"
+                container('aws-cli') {
+                    sh '''
+                        set -eu
+
+                        aws sts get-caller-identity
+
+                        aws ecr describe-repositories \
+                          --region "$AWS_REGION" \
+                          --repository-names "$REPO_NAME" >/dev/null
+
+                        set +x
+                        ECR_PASSWORD=$(aws ecr get-login-password --region "$AWS_REGION")
+                        AUTH=$(printf 'AWS:%s' "$ECR_PASSWORD" | base64 | tr -d '\\n')
+
+                        printf '{"auths":{"%s":{"auth":"%s"}}}' \
+                          "$ECR_REGISTRY" "$AUTH" \
+                          > /kaniko/.docker/config.json
+
+                        unset ECR_PASSWORD AUTH
+                        echo "ECR authentication configured"
+                    '''
+                }
             }
         }
 
-        stage('Prepare Build Metadata') {
+        stage('4. Build and Push Image') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
             steps {
-                echo "AWS Region  : ${params.AWS_REGION}"
-                echo "AWS Account : ${params.AWS_ACCOUNT_ID}"
-                echo "ECR Repo    : ${ECR_REPO}"
-                echo "Image Tag   : ${IMAGE_TAG}"
-                echo "Branch      : ${params.GIT_BRANCH}"
+                container('kaniko') {
+                    sh '''
+                        set -eu
+
+                        /kaniko/executor \
+                          --context "$WORKSPACE/$APP_SOURCE_PATH" \
+                          --dockerfile "$WORKSPACE/$APP_SOURCE_PATH/Dockerfile" \
+                          --destination "$ECR_REPO:$IMAGE_TAG" \
+                          --cache=true
+
+                        echo "Image pushed successfully"
+                    '''
+                }
             }
         }
 
-        stage('Build Docker Image') {
+        stage('5. Verify ECR Image') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
             steps {
-                echo "Docker build stage"
-                echo "Image: ${ECR_REPO}:${IMAGE_TAG}"
+                container('aws-cli') {
+                    sh '''
+                        aws ecr describe-images \
+                          --region "$AWS_REGION" \
+                          --repository-name "$REPO_NAME" \
+                          --image-ids imageTag="$IMAGE_TAG"
+
+                        echo "ECR image verification successful"
+                    '''
+                }
             }
         }
 
-        stage('Push To ECR') {
+        stage('6. Update Helm Values') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
             steps {
-                echo "ECR push stage"
+                container('jnlp') {
+                    sh '''
+                        set -eu
+
+                        sed -i -E \
+                          "s|^([[:space:]]*repository:).*|\\1 ${ECR_REPO}|; s|^([[:space:]]*tag:).*|\\1 \\"${IMAGE_TAG}\\"|" \
+                          "$HELM_VALUES_FILE"
+
+                        echo "Updated Helm values:"
+                        grep -A3 '^image:' "$HELM_VALUES_FILE"
+                    '''
+                }
             }
         }
 
-        stage('Update Helm Values') {
+        stage('7. GitOps Commit and Push') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
             steps {
-                echo "Helm values update stage"
+                container('jnlp') {
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'github-creds',
+                            usernameVariable: 'GIT_USERNAME',
+                            passwordVariable: 'GIT_TOKEN'
+                        )
+                    ]) {
+                        sh '''
+                            set -eu
+
+                            git config user.name "Jenkins CI"
+                            git config user.email "jenkins@users.noreply.github.com"
+
+                            git add "$HELM_VALUES_FILE"
+
+                            git commit -m \
+                              "chore(gitops): update sample-app image ${IMAGE_TAG} [skip ci]"
+
+                            cat > "$WORKSPACE/git-askpass.sh" <<'EOF'
+#!/bin/sh
+case "$1" in
+  *Username*) printf '%s\\n' "$GIT_USERNAME" ;;
+  *Password*) printf '%s\\n' "$GIT_TOKEN" ;;
+  *) exit 1 ;;
+esac
+EOF
+
+                            chmod 700 "$WORKSPACE/git-askpass.sh"
+
+                            export GIT_ASKPASS="$WORKSPACE/git-askpass.sh"
+                            export GIT_TERMINAL_PROMPT=0
+
+                            trap 'rm -f "$WORKSPACE/git-askpass.sh"' EXIT
+
+                            git push origin "HEAD:${GIT_BRANCH}"
+
+                            echo "GitOps changes pushed successfully"
+                        '''
+                    }
+                }
             }
         }
 
-        stage('GitOps Commit') {
-            steps {
-                echo "GitOps commit stage"
+        stage('8. Argo CD Deployment Handoff') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
             }
-        }
-
-        stage('ArgoCD Deployment') {
             steps {
-                echo "ArgoCD auto-sync stage"
+                echo """
+                GitOps commit pushed successfully.
+
+                Repository: ${params.REPO_NAME}
+                Image: ${ECR_REPO}:${IMAGE_TAG}
+
+                Argo CD should detect the Helm values change
+                and automatically synchronize the application.
+                """
             }
         }
     }
 
     post {
         success {
-            echo 'Pipeline completed successfully'
+            echo "Pipeline completed. Image: ${env.ECR_REPO}:${env.IMAGE_TAG}"
         }
-
         failure {
-            echo 'Pipeline failed'
+            echo "Pipeline failed. Check Console Output."
         }
-
         always {
-            echo 'Pipeline finished'
+            echo "Pipeline execution finished."
         }
     }
 }
