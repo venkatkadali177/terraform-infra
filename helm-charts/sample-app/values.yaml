@@ -4,8 +4,8 @@ app:
   name: nginx
 
 image:
-  repository: nginx
-  tag: latest
+  repository: 388439400978.dkr.ecr.ap-south-1.amazonaws.com/sample-app
+  tag: "12-289c6c9b"
   pullPolicy: IfNotPresent
 
 service:
