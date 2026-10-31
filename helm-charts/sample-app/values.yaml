@@ -5,7 +5,7 @@ app:
 
 image:
   repository: 388439400978.dkr.ecr.ap-south-1.amazonaws.com/sample-app
-  tag: "14-081ea8a7"
+  tag: "16-b0a09542"
   pullPolicy: IfNotPresent
 
 service:
