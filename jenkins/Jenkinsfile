@@ -9,6 +9,7 @@ apiVersion: v1
 kind: Pod
 spec:
   serviceAccountName: jenkins
+
   containers:
     - name: aws-cli
       image: public.ecr.aws/aws-cli/aws-cli:latest
@@ -49,14 +50,15 @@ spec:
         string(name: 'AWS_REGION', defaultValue: 'ap-south-1')
         string(name: 'AWS_ACCOUNT_ID', defaultValue: '388439400978')
         string(name: 'REPO_NAME', defaultValue: 'sample-app')
-        string(name: 'GIT_BRANCH', defaultValue: 'main')
     }
 
     environment {
         AWS_REGION = "${params.AWS_REGION}"
         AWS_ACCOUNT_ID = "${params.AWS_ACCOUNT_ID}"
         REPO_NAME = "${params.REPO_NAME}"
-        GIT_BRANCH = "${params.GIT_BRANCH}"
+
+        // All GitOps updates must go to main.
+        GITOPS_BRANCH = 'main'
 
         APP_SOURCE_PATH = 'sample-app-source'
         HELM_VALUES_FILE = 'helm-charts/sample-app/values.yaml'
@@ -66,6 +68,7 @@ spec:
     }
 
     stages {
+
         stage('1. Checkout GitHub') {
             steps {
                 container('jnlp') {
@@ -87,6 +90,8 @@ spec:
                         env.SKIP_PIPELINE =
                             env.COMMIT_MESSAGE.contains('[skip ci]') ? 'true' : 'false'
 
+                        echo "Source branch: ${env.BRANCH_NAME ?: 'normal-pipeline'}"
+                        echo "GitOps destination: ${env.GITOPS_BRANCH}"
                         echo "Commit: ${env.GIT_COMMIT_SHORT}"
                         echo "Image tag: ${env.IMAGE_TAG}"
                     }
@@ -104,11 +109,13 @@ spec:
                     sh '''
                         set -eu
 
+                        echo "Checking application files..."
+
                         test -f sample-app-source/index.html
                         test -f sample-app-source/Dockerfile
                         test -f helm-charts/sample-app/values.yaml
 
-                        echo "Application validation successful"
+                        echo "Application validation successful."
                     '''
                 }
             }
@@ -147,7 +154,7 @@ spec:
 
                         unset ECR_PASSWORD AUTH
 
-                        echo "ECR authentication configured successfully"
+                        echo "ECR authentication configured successfully."
                     '''
                 }
             }
@@ -164,6 +171,7 @@ spec:
                         set -eu
 
                         echo "Building Docker image..."
+                        echo "Image: $ECR_REPO:$IMAGE_TAG"
 
                         /kaniko/executor \
                           --context "$WORKSPACE/$APP_SOURCE_PATH" \
@@ -171,7 +179,7 @@ spec:
                           --destination "$ECR_REPO:$IMAGE_TAG" \
                           --cache=true
 
-                        echo "Image pushed successfully"
+                        echo "Image pushed successfully."
                     '''
                 }
             }
@@ -187,39 +195,62 @@ spec:
                     sh '''
                         set -eu
 
+                        echo "Verifying image in ECR..."
+
                         aws ecr describe-images \
                           --region "$AWS_REGION" \
                           --repository-name "$REPO_NAME" \
                           --image-ids imageTag="$IMAGE_TAG"
 
-                        echo "ECR image verification successful"
+                        echo "ECR image verification successful."
                     '''
                 }
             }
         }
 
-        stage('6. Update Helm Values') {
+        stage('6. Prepare Deployment') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
 
             steps {
-                container('jnlp') {
-                    sh '''
-                        set -eu
+                echo """
+                Deployment prepared.
 
-                        sed -i -E \
-                          "s|^([[:space:]]*repository:).*|\\1 ${ECR_REPO}|; s|^([[:space:]]*tag:).*|\\1 \\"${IMAGE_TAG}\\"|" \
-                          "$HELM_VALUES_FILE"
+                Application: ${params.REPO_NAME}
+                Image: ${env.ECR_REPO}:${env.IMAGE_TAG}
+                Source branch: ${env.BRANCH_NAME ?: 'normal-pipeline'}
+                GitOps destination: ${env.GITOPS_BRANCH}
 
-                        echo "Updated Helm values:"
-                        grep -A3 '^image:' "$HELM_VALUES_FILE"
-                    '''
+                Helm values will be updated after approval.
+                """
+            }
+        }
+
+        stage('7. Manual Deployment Approval') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
+
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    input(
+                        id: 'DeploymentApproval',
+                        message: """Approve deployment?
+
+Application: ${params.REPO_NAME}
+Image: ${env.ECR_REPO}:${env.IMAGE_TAG}
+Source branch: ${env.BRANCH_NAME ?: 'normal-pipeline'}
+GitOps destination: ${env.GITOPS_BRANCH}
+
+Approving will update Helm values on main.""",
+                        ok: 'Approve Deployment'
+                    )
                 }
             }
         }
 
-        stage('7. GitOps Commit and Push') {
+        stage('8. GitOps Commit and Push to main') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
@@ -235,14 +266,6 @@ spec:
                     ]) {
                         sh '''
                             set -eu
-
-                            git config user.name "Jenkins CI"
-                            git config user.email "jenkins@users.noreply.github.com"
-
-                            git add "$HELM_VALUES_FILE"
-
-                            git commit -m \
-                              "chore(gitops): update sample-app image ${IMAGE_TAG} [skip ci]"
 
                             cat > "$WORKSPACE/git-askpass.sh" <<'EOF'
 #!/bin/sh
@@ -260,26 +283,57 @@ EOF
 
                             trap 'rm -f "$WORKSPACE/git-askpass.sh"' EXIT
 
-                            git push origin "HEAD:${GIT_BRANCH}"
+                            git config user.name "Jenkins CI"
+                            git config user.email "jenkins@users.noreply.github.com"
 
-                            echo "GitOps changes pushed successfully"
+                            echo "Fetching latest main branch..."
+
+                            git fetch origin "$GITOPS_BRANCH"
+
+                            # Work from the latest main branch.
+                            git checkout -B gitops-main "origin/$GITOPS_BRANCH"
+
+                            # Update the image repository and tag on main.
+                            sed -i -E \
+                              "s|^([[:space:]]*repository:).*|\\1 ${ECR_REPO}|; s|^([[:space:]]*tag:).*|\\1 \\"${IMAGE_TAG}\\"|" \
+                              "$HELM_VALUES_FILE"
+
+                            echo "Updated Helm values:"
+                            grep -A3 '^image:' "$HELM_VALUES_FILE"
+
+                            git add "$HELM_VALUES_FILE"
+
+                            if git diff --cached --quiet; then
+                                echo "No GitOps changes to commit."
+                                exit 0
+                            fi
+
+                            git commit -m \
+                              "chore(gitops): update sample-app image ${IMAGE_TAG} [skip ci]"
+
+                            echo "Pushing GitOps update to main..."
+
+                            git push origin "HEAD:refs/heads/$GITOPS_BRANCH"
+
+                            echo "GitOps changes pushed successfully to main."
                         '''
                     }
                 }
             }
         }
 
-        stage('8. Argo CD Deployment Handoff') {
+        stage('9. Argo CD Deployment Handoff') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
 
             steps {
                 echo """
-                GitOps commit pushed successfully.
+                GitOps update pushed successfully.
 
-                Repository: ${params.REPO_NAME}
+                Application: ${params.REPO_NAME}
                 Image: ${env.ECR_REPO}:${env.IMAGE_TAG}
+                GitOps branch: ${env.GITOPS_BRANCH}
 
                 Argo CD should detect the Helm values change
                 and automatically synchronize the application.
@@ -294,7 +348,8 @@ EOF
                 if (env.SKIP_PIPELINE == 'true') {
                     echo "GitOps commit detected. Pipeline stages skipped."
                 } else {
-                    echo "Pipeline completed. Image: ${env.ECR_REPO}:${env.IMAGE_TAG}"
+                    echo "Pipeline completed successfully."
+                    echo "Image: ${env.ECR_REPO}:${env.IMAGE_TAG}"
                 }
             }
         }
