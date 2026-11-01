@@ -31,6 +31,14 @@ spec:
         - name: workspace-volume
           mountPath: /home/jenkins/agent
 
+    - name: sonar-scanner
+      image: sonarsource/sonar-scanner-cli:latest
+      command: ["sh", "-c", "cat"]
+      tty: true
+      volumeMounts:
+        - name: workspace-volume
+          mountPath: /home/jenkins/agent
+
   volumes:
     - name: ecr-docker-config
       emptyDir: {}
@@ -121,7 +129,38 @@ spec:
             }
         }
 
-        stage('3. AWS ECR Authentication') {
+        stage('3. SonarQube Code Analysis') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
+
+            steps {
+                container('sonar-scanner') {
+                    withCredentials([
+                        string(
+                            credentialsId: 'sonarqube-token',
+                            variable: 'SONAR_TOKEN'
+                        )
+                    ]) {
+                        sh '''
+                            set -eu
+
+                            echo "Starting SonarQube Cloud analysis..."
+
+                            sonar-scanner \
+                              -Dsonar.host.url=https://sonarcloud.io \
+                              -Dsonar.organization=venkatkadali177 \
+                              -Dsonar.projectKey=venkatkadali177_terraform-infra \
+                              -Dsonar.sources=.
+
+                            echo "SonarQube analysis submitted successfully."
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('4. AWS ECR Authentication') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
@@ -160,7 +199,7 @@ spec:
             }
         }
 
-        stage('4. Build and Push Image') {
+        stage('5. Build and Push Image') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
@@ -185,7 +224,7 @@ spec:
             }
         }
 
-        stage('5. Verify ECR Image') {
+        stage('6. Verify ECR Image') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
@@ -208,7 +247,7 @@ spec:
             }
         }
 
-        stage('6. Prepare Deployment') {
+        stage('7. Prepare Deployment') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
@@ -227,7 +266,7 @@ spec:
             }
         }
 
-        stage('7. Manual Deployment Approval') {
+        stage('8. Manual Deployment Approval') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
@@ -250,7 +289,7 @@ Approving will update Helm values on main.""",
             }
         }
 
-        stage('8. GitOps Commit and Push to main') {
+        stage('9. GitOps Commit and Push to main') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
@@ -322,7 +361,7 @@ EOF
             }
         }
 
-        stage('9. Argo CD Deployment Handoff') {
+        stage('10. Argo CD Deployment Handoff') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
