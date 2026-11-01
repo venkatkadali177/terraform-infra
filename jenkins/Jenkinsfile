@@ -10,6 +10,17 @@ kind: Pod
 spec:
   serviceAccountName: jenkins
 
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: workload
+                operator: In
+                values:
+                  - jenkins-agent
+
   containers:
     - name: aws-cli
       image: public.ecr.aws/aws-cli/aws-cli:latest
@@ -145,13 +156,54 @@ spec:
                         sh '''
                             set -eu
 
-                            echo "Starting SonarQube Cloud analysis..."
+                            echo "=========================================="
+                            echo "Starting SonarQube Cloud DEBUG analysis"
+                            echo "=========================================="
+
+                            echo "===== SCANNER VERSION ====="
+                            sonar-scanner --version
+
+                            echo "===== NODE.JS VERSION ====="
+                            node --version
+
+                            echo "===== NODE.JS ARCHITECTURE ====="
+                            node -p "process.arch"
+
+                            echo "===== JAVA VERSION ====="
+                            java -version 2>&1
+
+                            echo "===== MEMORY BEFORE SCAN ====="
+                            cat /sys/fs/cgroup/memory.max || true
+                            cat /sys/fs/cgroup/memory.current || true
+                            cat /sys/fs/cgroup/memory.events || true
+
+                            echo "===== STARTING SONARQUBE ANALYSIS ====="
+
+                            set +e
 
                             sonar-scanner \
+                              -X \
                               -Dsonar.host.url=https://sonarcloud.io \
                               -Dsonar.organization=venkatkadali177 \
                               -Dsonar.projectKey=venkatkadali177_terraform-infra \
                               -Dsonar.sources=.
+
+                            SCAN_EXIT_CODE=$?
+
+                            set -e
+
+                            echo "===== MEMORY AFTER SCAN ====="
+                            cat /sys/fs/cgroup/memory.max || true
+                            cat /sys/fs/cgroup/memory.current || true
+                            cat /sys/fs/cgroup/memory.events || true
+
+                            echo "===== SONAR SCANNER EXIT CODE ====="
+                            echo "$SCAN_EXIT_CODE"
+
+                            if [ "$SCAN_EXIT_CODE" -ne 0 ]; then
+                                echo "SonarQube analysis failed."
+                                exit "$SCAN_EXIT_CODE"
+                            fi
 
                             echo "SonarQube analysis submitted successfully."
                         '''
