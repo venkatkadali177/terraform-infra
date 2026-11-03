@@ -41,7 +41,7 @@ spec:
         - name: workspace-volume
           mountPath: /home/jenkins/agent
         - name: trivy-cache
-          mountPath: /root/.cache/
+          mountPath: /root/.cache/trivy
 
   volumes:
     - name: ecr-docker-config
@@ -246,18 +246,33 @@ spec:
                         echo "=================================="
 
                         export DOCKER_CONFIG=/kaniko/.docker
+                        export TRIVY_CACHE_DIR=/root/.cache/trivy
 
                         echo "Scanning image: $ECR_REPO:$IMAGE_TAG"
 
                         trivy image \
-                          --cache-dir /root/.cache/trivy \
+                          --cache-dir "$TRIVY_CACHE_DIR" \
+                          --timeout 10m \
+                          --image-src remote \
+                          --scanners vuln \
                           --severity HIGH,CRITICAL \
+                          --ignore-unfixed \
+                          --format json \
+                          --output "$WORKSPACE/trivy-image-report.json" \
                           --exit-code 1 \
-                          --format table \
                           "$ECR_REPO:$IMAGE_TAG"
 
                         echo "Trivy scan completed successfully"
                     '''
+                }
+            }
+
+            post {
+                always {
+                    archiveArtifacts(
+                        artifacts: 'trivy-image-report.json',
+                        allowEmptyArchive: true
+                    )
                 }
             }
         }
