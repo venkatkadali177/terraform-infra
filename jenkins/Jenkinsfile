@@ -361,7 +361,7 @@ EOF_ASKPASS
         }
 
         always {
-            echo "Pipeline execution finished."
+            echo "Pipeline execution finished. lets verify and thank u "
         }
     }
 }
