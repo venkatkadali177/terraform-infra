@@ -59,16 +59,14 @@ spec:
       tty: true
       env:
         - name: SONAR_SCANNER_JAVA_OPTS
-          value: "-Xmx256m"
-        - name: NODE_OPTIONS
-          value: "--max-old-space-size=384"
+          value: "-Xmx512m"
       resources:
         requests:
-          cpu: 100m
-          memory: 384Mi
+          cpu: 200m
+          memory: 1Gi
         limits:
-          cpu: 500m
-          memory: 896Mi
+          cpu: 1000m
+          memory: 1536Mi
       volumeMounts:
         - name: workspace-volume
           mountPath: /home/jenkins/agent
@@ -181,22 +179,13 @@ spec:
                     withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
                         sh '''
                             set -eu
-                            echo "===== SonarScanner version ====="
-                            sonar-scanner --version
-                            echo "===== Node.js version ====="
-                            node --version
-                            echo "===== Java version ====="
-                            java -version 2>&1
-                            echo "===== Container memory ====="
-                            cat /sys/fs/cgroup/memory.max || true
-                            cat /sys/fs/cgroup/memory.current || true
-                            cat /sys/fs/cgroup/memory.events || true
                             sonar-scanner \
                               -Dsonar.host.url=https://sonarcloud.io \
                               -Dsonar.organization=venkatkadali177 \
                               -Dsonar.projectKey=venkatkadali177_terraform-infra \
                               -Dsonar.sources=. \
-                              '-Dsonar.exclusions=**/.git/**,**/node_modules/**,**/.venv/**,**/venv/**,**/dist/**,**/build/**,**/trivy-*-report.json' \
+                              '-Dsonar.exclusions=**/.git/**,**/node_modules/**,**/.venv/**,**/venv/**,**/dist/**,**/build/**,**/trivy-*-report.json,**/*.js,**/*.jsx,**/*.ts,**/*.tsx,**/*.css' \
+                              -Dsonar.javascript.node.maxspace=512 \
                               -Dsonar.token="$SONAR_TOKEN"
                             echo "SonarCloud analysis submitted successfully."
                         '''
