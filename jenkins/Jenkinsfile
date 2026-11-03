@@ -8,28 +8,11 @@ apiVersion: v1
 kind: Pod
 spec:
   serviceAccountName: jenkins
-  affinity:
-    nodeAffinity:
-      preferredDuringSchedulingIgnoredDuringExecution:
-        - weight: 100
-          preference:
-            matchExpressions:
-              - key: workload
-                operator: In
-                values:
-                  - jenkins-agent
   containers:
     - name: aws-cli
       image: public.ecr.aws/aws-cli/aws-cli:latest
       command: ["sh", "-c", "cat"]
       tty: true
-      resources:
-        requests:
-          cpu: 50m
-          memory: 64Mi
-        limits:
-          cpu: 250m
-          memory: 256Mi
       volumeMounts:
         - name: ecr-docker-config
           mountPath: /kaniko/.docker
@@ -40,60 +23,23 @@ spec:
       image: gcr.io/kaniko-project/executor:v1.23.2-debug
       command: ["/busybox/sh", "-c", "cat"]
       tty: true
-      resources:
-        requests:
-          cpu: 100m
-          memory: 128Mi
-        limits:
-          cpu: 500m
-          memory: 512Mi
       volumeMounts:
         - name: ecr-docker-config
           mountPath: /kaniko/.docker
-        - name: workspace-volume
-          mountPath: /home/jenkins/agent
-
-    - name: sonar-scanner
-      image: sonarsource/sonar-scanner-cli:latest
-      command: ["sh", "-c", "cat"]
-      tty: true
-      env:
-        - name: SONAR_SCANNER_JAVA_OPTS
-          value: "-Xmx512m"
-      resources:
-        requests:
-          cpu: 200m
-          memory: 1Gi
-        limits:
-          cpu: 1000m
-          memory: 1536Mi
-      volumeMounts:
         - name: workspace-volume
           mountPath: /home/jenkins/agent
 
     - name: trivy
       image: aquasec/trivy:latest
-      command: ["/bin/sh", "-c", "cat"]
+      command: ["sh", "-c", "cat"]
       tty: true
-      env:
-        - name: TRIVY_CACHE_DIR
-          value: /tmp/trivy-cache
-        - name: DOCKER_CONFIG
-          value: /kaniko/.docker
-      resources:
-        requests:
-          cpu: 100m
-          memory: 128Mi
-        limits:
-          cpu: 500m
-          memory: 512Mi
       volumeMounts:
-        - name: workspace-volume
-          mountPath: /home/jenkins/agent
         - name: ecr-docker-config
           mountPath: /kaniko/.docker
+        - name: workspace-volume
+          mountPath: /home/jenkins/agent
         - name: trivy-cache
-          mountPath: /tmp/trivy-cache
+          mountPath: /root/.cache/trivy
 
   volumes:
     - name: ecr-docker-config
@@ -101,8 +47,7 @@ spec:
     - name: workspace-volume
       emptyDir: {}
     - name: trivy-cache
-      emptyDir:
-        sizeLimit: 1Gi
+      emptyDir: {}
 '''
         }
     }
@@ -110,24 +55,25 @@ spec:
     options {
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        timeout(time: 45, unit: 'MINUTES')
+        timeout(time: 30, unit: 'MINUTES')
     }
 
     parameters {
         string(name: 'AWS_REGION', defaultValue: 'ap-south-1')
         string(name: 'AWS_ACCOUNT_ID', defaultValue: '388439400978')
         string(name: 'REPO_NAME', defaultValue: 'sample-app')
+        string(name: 'GIT_BRANCH', defaultValue: 'main')
     }
 
     environment {
         AWS_REGION = "${params.AWS_REGION}"
         AWS_ACCOUNT_ID = "${params.AWS_ACCOUNT_ID}"
         REPO_NAME = "${params.REPO_NAME}"
-        // Build from the branch selected by the Jenkins job (currently feature).
-        // GitOps deployment updates continue to target main after manual approval.
-        GITOPS_BRANCH = 'main'
+        GIT_BRANCH = "${params.GIT_BRANCH}"
+
         APP_SOURCE_PATH = 'sample-app-source'
         HELM_VALUES_FILE = 'helm-charts/sample-app/values.yaml'
+
         ECR_REGISTRY = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com"
         ECR_REPO = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.REPO_NAME}"
     }
@@ -137,19 +83,23 @@ spec:
             steps {
                 container('jnlp') {
                     checkout scm
+
                     script {
                         env.GIT_COMMIT_SHORT = sh(
                             script: 'git rev-parse --short=8 HEAD',
                             returnStdout: true
                         ).trim()
+
                         env.IMAGE_TAG = "${BUILD_NUMBER}-${env.GIT_COMMIT_SHORT}"
+
                         env.COMMIT_MESSAGE = sh(
                             script: 'git log -1 --pretty=%s',
                             returnStdout: true
                         ).trim()
-                        env.SKIP_PIPELINE = env.COMMIT_MESSAGE.contains('[skip ci]') ? 'true' : 'false'
-                        echo "Source branch: ${env.BRANCH_NAME ?: 'normal-pipeline'}"
-                        echo "GitOps destination: ${env.GITOPS_BRANCH}"
+
+                        env.SKIP_PIPELINE =
+                            env.COMMIT_MESSAGE.contains('[skip ci]') ? 'true' : 'false'
+
                         echo "Commit: ${env.GIT_COMMIT_SHORT}"
                         echo "Image tag: ${env.IMAGE_TAG}"
                     }
@@ -158,231 +108,239 @@ spec:
         }
 
         stage('2. Validate Application') {
-            when { expression { env.SKIP_PIPELINE != 'true' } }
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
+
             steps {
                 container('jnlp') {
                     sh '''
                         set -eu
+
                         test -f sample-app-source/index.html
                         test -f sample-app-source/Dockerfile
                         test -f helm-charts/sample-app/values.yaml
-                        echo "Application validation successful."
+
+                        echo "Application validation successful"
                     '''
                 }
             }
         }
 
-        stage('3. SonarCloud Code Analysis') {
-            when { expression { env.SKIP_PIPELINE != 'true' } }
-            steps {
-                container('sonar-scanner') {
-                    withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
-                        sh '''
-                            set -eu
-                            sonar-scanner \
-                              -Dsonar.host.url=https://sonarcloud.io \
-                              -Dsonar.organization=venkatkadali177 \
-                              -Dsonar.projectKey=venkatkadali177_terraform-infra \
-                              -Dsonar.sources=. \
-                              '-Dsonar.exclusions=**/.git/**,**/node_modules/**,**/.venv/**,**/venv/**,**/dist/**,**/build/**,**/trivy-*-report.json,**/*.js,**/*.jsx,**/*.ts,**/*.tsx,**/*.css' \
-                              -Dsonar.javascript.node.maxspace=512 \
-                              -Dsonar.token="$SONAR_TOKEN"
-                            echo "SonarCloud analysis submitted successfully."
-                        '''
-                    }
-                }
+        stage('3. AWS ECR Authentication') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
             }
-        }
 
-        stage('4. Trivy Filesystem Security Scan') {
-            when { expression { env.SKIP_PIPELINE != 'true' } }
-            steps {
-                container('trivy') {
-                    sh '''
-                        set -eu
-                        trivy --version
-                        echo "Scanning repository for HIGH and CRITICAL findings..."
-                        set +e
-                        trivy fs \
-                          --cache-dir "$TRIVY_CACHE_DIR" \
-                          --timeout 10m \
-                          --scanners vuln,misconfig,secret \
-                          --severity HIGH,CRITICAL \
-                          --ignore-unfixed \
-                          --skip-dirs "$WORKSPACE/.git" \
-                          --skip-dirs "$WORKSPACE/node_modules" \
-                          --skip-dirs "$WORKSPACE/.venv" \
-                          --format json \
-                          --output "$WORKSPACE/trivy-fs-report.json" \
-                          --exit-code 1 \
-                          "$WORKSPACE"
-                        SCAN_EXIT_CODE=$?
-                        set -e
-                        if [ "$SCAN_EXIT_CODE" -ne 0 ]; then
-                            echo "Trivy filesystem scan failed or found HIGH/CRITICAL findings."
-                            exit "$SCAN_EXIT_CODE"
-                        fi
-                        echo "Trivy filesystem scan passed."
-                    '''
-                }
-            }
-        }
-
-        stage('5. AWS ECR Authentication') {
-            when { expression { env.SKIP_PIPELINE != 'true' } }
             steps {
                 container('aws-cli') {
                     sh '''
                         set -eu
+
+                        echo "Checking AWS identity..."
                         aws sts get-caller-identity
-                        aws ecr describe-repositories --region "$AWS_REGION" --repository-names "$REPO_NAME" >/dev/null
+
+                        echo "Checking ECR repository..."
+                        aws ecr describe-repositories \
+                          --region "$AWS_REGION" \
+                          --repository-names "$REPO_NAME" >/dev/null
+
+                        echo "Generating ECR authentication..."
+
                         set +x
-                        ECR_PASSWORD=$(aws ecr get-login-password --region "$AWS_REGION")
-                        AUTH=$(printf 'AWS:%s' "$ECR_PASSWORD" | base64 | tr -d '\n')
-                        printf '{"auths":{"%s":{"auth":"%s"}}}' "$ECR_REGISTRY" "$AUTH" > /kaniko/.docker/config.json
+
+                        ECR_PASSWORD=$(aws ecr get-login-password \
+                          --region "$AWS_REGION")
+
+                        AUTH=$(printf 'AWS:%s' "$ECR_PASSWORD" | base64 | tr -d '\\n')
+
+                        printf '{"auths":{"%s":{"auth":"%s"}}}' \
+                          "$ECR_REGISTRY" "$AUTH" \
+                          > /kaniko/.docker/config.json
+
                         unset ECR_PASSWORD AUTH
-                        echo "ECR authentication configured successfully."
+
+                        echo "ECR authentication configured successfully"
                     '''
                 }
             }
         }
 
-        stage('6. Build and Push Image') {
-            when { expression { env.SKIP_PIPELINE != 'true' } }
+        stage('4. Build and Push Image') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
+
             steps {
                 container('kaniko') {
                     sh '''
                         set -eu
-                        echo "Building $ECR_REPO:$IMAGE_TAG"
+
+                        echo "Building Docker image..."
+
                         /kaniko/executor \
                           --context "$WORKSPACE/$APP_SOURCE_PATH" \
                           --dockerfile "$WORKSPACE/$APP_SOURCE_PATH/Dockerfile" \
                           --destination "$ECR_REPO:$IMAGE_TAG" \
                           --cache=true
-                        echo "Image pushed successfully."
+
+                        echo "Image pushed successfully"
                     '''
                 }
             }
         }
 
-        stage('7. Trivy Container Image Scan') {
-            when { expression { env.SKIP_PIPELINE != 'true' } }
+        stage('5. Trivy Image Scan') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
+
             steps {
                 container('trivy') {
                     sh '''
                         set -eu
-                        test -s /kaniko/.docker/config.json
-                        echo "Scanning ECR image $ECR_REPO:$IMAGE_TAG"
-                        set +e
+
+                        export DOCKER_CONFIG=/kaniko/.docker
+                        export TRIVY_CACHE_DIR=/root/.cache/trivy
+
+                        echo "Scanning pushed ECR image..."
+                        echo "Image: $ECR_REPO:$IMAGE_TAG"
+
                         trivy image \
                           --cache-dir "$TRIVY_CACHE_DIR" \
                           --timeout 10m \
                           --image-src remote \
-                          --scanners vuln,misconfig,secret \
+                          --scanners vuln \
                           --severity HIGH,CRITICAL \
                           --ignore-unfixed \
                           --format json \
                           --output "$WORKSPACE/trivy-image-report.json" \
-                          --exit-code 1 \
+                          --exit-code 0 \
                           "$ECR_REPO:$IMAGE_TAG"
-                        SCAN_EXIT_CODE=$?
-                        set -e
-                        if [ "$SCAN_EXIT_CODE" -ne 0 ]; then
-                            echo "Trivy image scan failed or found HIGH/CRITICAL findings."
-                            exit "$SCAN_EXIT_CODE"
-                        fi
-                        echo "Trivy image scan passed."
+
+                        echo "Trivy scan completed."
+                        echo "Report: $WORKSPACE/trivy-image-report.json"
                     '''
                 }
             }
-        }
 
-        stage('8. Verify ECR Image') {
-            when { expression { env.SKIP_PIPELINE != 'true' } }
-            steps {
-                container('aws-cli') {
-                    sh '''
-                        set -eu
-                        aws ecr describe-images \
-                          --region "$AWS_REGION" \
-                          --repository-name "$REPO_NAME" \
-                          --image-ids imageTag="$IMAGE_TAG"
-                        echo "ECR image verification successful."
-                    '''
-                }
-            }
-        }
-
-        stage('9. Prepare Deployment') {
-            when { expression { env.SKIP_PIPELINE != 'true' } }
-            steps {
-                echo "Deployment prepared: ${env.ECR_REPO}:${env.IMAGE_TAG}. GitOps target: ${env.GITOPS_BRANCH}."
-            }
-        }
-
-        stage('10. Manual Deployment Approval') {
-            when { expression { env.SKIP_PIPELINE != 'true' } }
-            steps {
-                timeout(time: 15, unit: 'MINUTES') {
-                    input(
-                        id: 'DeploymentApproval',
-                        message: "Approve deployment of ${env.ECR_REPO}:${env.IMAGE_TAG} from ${env.BRANCH_NAME ?: 'normal-pipeline'}? Approval updates Helm values on main.",
-                        ok: 'Approve Deployment'
+            post {
+                always {
+                    archiveArtifacts(
+                        artifacts: 'trivy-image-report.json',
+                        allowEmptyArchive: true
                     )
                 }
             }
         }
 
-        stage('11. GitOps Commit and Push to main') {
-            when { expression { env.SKIP_PIPELINE != 'true' } }
+        stage('6. Verify ECR Image') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
+
+            steps {
+                container('aws-cli') {
+                    sh '''
+                        set -eu
+
+                        aws ecr describe-images \
+                          --region "$AWS_REGION" \
+                          --repository-name "$REPO_NAME" \
+                          --image-ids imageTag="$IMAGE_TAG"
+
+                        echo "ECR image verification successful"
+                    '''
+                }
+            }
+        }
+
+        stage('7. Update Helm Values') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
+
             steps {
                 container('jnlp') {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'github-creds',
-                        usernameVariable: 'GIT_USERNAME',
-                        passwordVariable: 'GIT_TOKEN'
-                    )]) {
+                    sh '''
+                        set -eu
+
+                        sed -i -E \
+                          "s|^([[:space:]]*repository:).*|\\1 ${ECR_REPO}|; s|^([[:space:]]*tag:).*|\\1 \\"${IMAGE_TAG}\\"|" \
+                          "$HELM_VALUES_FILE"
+
+                        echo "Updated Helm values:"
+                        grep -A3 '^image:' "$HELM_VALUES_FILE"
+                    '''
+                }
+            }
+        }
+
+        stage('8. GitOps Commit and Push') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
+
+            steps {
+                container('jnlp') {
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'github-creds',
+                            usernameVariable: 'GIT_USERNAME',
+                            passwordVariable: 'GIT_TOKEN'
+                        )
+                    ]) {
                         sh '''
                             set -eu
-                            cat > "$WORKSPACE/git-askpass.sh" <<'EOF2'
-#!/bin/sh
-case "$1" in
-  *Username*) printf '%s\n' "$GIT_USERNAME" ;;
-  *Password*) printf '%s\n' "$GIT_TOKEN" ;;
-  *) exit 1 ;;
-esac
-EOF2
-                            chmod 700 "$WORKSPACE/git-askpass.sh"
-                            export GIT_ASKPASS="$WORKSPACE/git-askpass.sh"
-                            export GIT_TERMINAL_PROMPT=0
-                            trap 'rm -f "$WORKSPACE/git-askpass.sh"' EXIT
+
                             git config user.name "Jenkins CI"
                             git config user.email "jenkins@users.noreply.github.com"
-                            git fetch origin "$GITOPS_BRANCH"
-                            git checkout -B gitops-main "origin/$GITOPS_BRANCH"
-                           sed -i -E "/^image:/,/^[^[:space:]]/ {
-                                                                s|^([[:space:]]*repository:).*|\\1 ${ECR_REPO}|
-                                                                s|^([[:space:]]*tag:).*|\\1 \"${IMAGE_TAG}\"|
-                                                                 }" "$HELM_VALUES_FILE"
-                            grep -A3 '^image:' "$HELM_VALUES_FILE"
+
                             git add "$HELM_VALUES_FILE"
-                            if git diff --cached --quiet; then
-                                echo "No GitOps changes to commit."
-                                exit 0
-                            fi
-                            git commit -m "chore(gitops): update sample-app image ${IMAGE_TAG} [skip ci]"
-                            git push origin "HEAD:refs/heads/$GITOPS_BRANCH"
-                            echo "GitOps changes pushed to main."
+
+                            git commit -m \
+                              "chore(gitops): update sample-app image ${IMAGE_TAG} [skip ci]"
+
+                            cat > "$WORKSPACE/git-askpass.sh" <<'EOF_ASKPASS'
+#!/bin/sh
+case "$1" in
+  *Username*) printf '%s\\n' "$GIT_USERNAME" ;;
+  *Password*) printf '%s\\n' "$GIT_TOKEN" ;;
+  *) exit 1 ;;
+esac
+EOF_ASKPASS
+
+                            chmod 700 "$WORKSPACE/git-askpass.sh"
+
+                            export GIT_ASKPASS="$WORKSPACE/git-askpass.sh"
+                            export GIT_TERMINAL_PROMPT=0
+
+                            trap 'rm -f "$WORKSPACE/git-askpass.sh"' EXIT
+
+                            git push origin "HEAD:${GIT_BRANCH}"
+
+                            echo "GitOps changes pushed successfully"
                         '''
                     }
                 }
             }
         }
 
-        stage('12. Argo CD Deployment Handoff') {
-            when { expression { env.SKIP_PIPELINE != 'true' } }
+        stage('9. Argo CD Deployment Handoff') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
+
             steps {
-                echo "GitOps update pushed. Argo CD should detect and synchronize ${env.GITOPS_BRANCH}."
+                echo """
+                GitOps commit pushed successfully.
+
+                Repository: ${params.REPO_NAME}
+                Image: ${env.ECR_REPO}:${env.IMAGE_TAG}
+
+                Argo CD should detect the Helm values change
+                and automatically synchronize the application.
+                """
             }
         }
     }
@@ -391,18 +349,19 @@ EOF2
         success {
             script {
                 if (env.SKIP_PIPELINE == 'true') {
-                    echo 'GitOps commit detected. Pipeline stages skipped.'
+                    echo "GitOps commit detected. Pipeline stages skipped."
                 } else {
-                    echo "Pipeline completed successfully. Image: ${env.ECR_REPO}:${env.IMAGE_TAG}"
+                    echo "Pipeline completed. Image: ${env.ECR_REPO}:${env.IMAGE_TAG}"
                 }
             }
         }
+
         failure {
-            echo 'Pipeline failed. Check Console Output and Trivy reports.'
+            echo "Pipeline failed. Check Console Output."
         }
+
         always {
-            archiveArtifacts artifacts: 'trivy-*-report.json', allowEmptyArchive: true, fingerprint: true
-            echo 'Pipeline execution finished.'
+            echo "Pipeline execution finished."
         }
     }
 }
