@@ -9,6 +9,7 @@ apiVersion: v1
 kind: Pod
 spec:
   serviceAccountName: jenkins
+
   containers:
     - name: aws-cli
       image: public.ecr.aws/aws-cli/aws-cli:latest
@@ -30,10 +31,26 @@ spec:
         - name: workspace-volume
           mountPath: /home/jenkins/agent
 
+    - name: trivy
+      image: public.ecr.aws/aquasecurity/trivy:0.76.0
+      command: ["/bin/sh", "-c", "cat"]
+      tty: true
+      volumeMounts:
+        - name: ecr-docker-config
+          mountPath: /kaniko/.docker
+        - name: workspace-volume
+          mountPath: /home/jenkins/agent
+        - name: trivy-cache
+          mountPath: /root/.cache/
+
   volumes:
     - name: ecr-docker-config
       emptyDir: {}
+
     - name: workspace-volume
+      emptyDir: {}
+
+    - name: trivy-cache
       emptyDir: {}
 '''
         }
@@ -42,7 +59,7 @@ spec:
     options {
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        timeout(time: 30, unit: 'MINUTES')
+        timeout(time: 45, unit: 'MINUTES')
     }
 
     parameters {
@@ -62,10 +79,14 @@ spec:
         HELM_VALUES_FILE = 'helm-charts/sample-app/values.yaml'
 
         ECR_REGISTRY = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com"
+
         ECR_REPO = "${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.REPO_NAME}"
     }
 
     stages {
+
+        // 1. CHECKOUT GITHUB
+
         stage('1. Checkout GitHub') {
             steps {
                 container('jnlp') {
@@ -94,6 +115,8 @@ spec:
             }
         }
 
+        // 2. VALIDATE APPLICATION
+
         stage('2. Validate Application') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
@@ -114,6 +137,8 @@ spec:
             }
         }
 
+        // 3. AWS ECR AUTHENTICATION
+
         stage('3. AWS ECR Authentication') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
@@ -125,9 +150,11 @@ spec:
                         set -eu
 
                         echo "Checking AWS identity..."
+
                         aws sts get-caller-identity
 
                         echo "Checking ECR repository..."
+
                         aws ecr describe-repositories \
                           --region "$AWS_REGION" \
                           --repository-names "$REPO_NAME" >/dev/null
@@ -153,6 +180,8 @@ spec:
             }
         }
 
+        // 4. BUILD AND PUSH IMAGE
+
         stage('4. Build and Push Image') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
@@ -177,6 +206,8 @@ spec:
             }
         }
 
+        // 5. VERIFY ECR IMAGE
+
         stage('5. Verify ECR Image') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
@@ -198,7 +229,42 @@ spec:
             }
         }
 
-        stage('6. Update Helm Values') {
+        // 6. TRIVY SECURITY SCAN
+
+        stage('6. Trivy Security Scan') {
+            when {
+                expression { env.SKIP_PIPELINE != 'true' }
+            }
+
+            steps {
+                container('trivy') {
+                    sh '''
+                        set -eu
+
+                        echo "=================================="
+                        echo "Starting Trivy Security Scan"
+                        echo "=================================="
+
+                        export DOCKER_CONFIG=/kaniko/.docker
+
+                        echo "Scanning image: $ECR_REPO:$IMAGE_TAG"
+
+                        trivy image \
+                          --cache-dir /root/.cache/trivy \
+                          --severity HIGH,CRITICAL \
+                          --exit-code 1 \
+                          --format table \
+                          "$ECR_REPO:$IMAGE_TAG"
+
+                        echo "Trivy scan completed successfully"
+                    '''
+                }
+            }
+        }
+
+        // 7. UPDATE HELM VALUES
+
+        stage('7. Update Helm Values') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
@@ -213,13 +279,16 @@ spec:
                           "$HELM_VALUES_FILE"
 
                         echo "Updated Helm values:"
+
                         grep -A3 '^image:' "$HELM_VALUES_FILE"
                     '''
                 }
             }
         }
 
-        stage('7. GitOps Commit and Push') {
+        // 8. GITOPS COMMIT AND PUSH
+
+        stage('8. GitOps Commit and Push') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
@@ -269,7 +338,9 @@ EOF
             }
         }
 
-        stage('8. Argo CD Deployment Handoff') {
+        // 9. ARGOCD DEPLOYMENT HANDOFF
+
+        stage('9. Argo CD Deployment Handoff') {
             when {
                 expression { env.SKIP_PIPELINE != 'true' }
             }
@@ -294,7 +365,8 @@ EOF
                 if (env.SKIP_PIPELINE == 'true') {
                     echo "GitOps commit detected. Pipeline stages skipped."
                 } else {
-                    echo "Pipeline completed. Image: ${env.ECR_REPO}:${env.IMAGE_TAG}"
+                    echo "Pipeline completed successfully."
+                    echo "Image: ${env.ECR_REPO}:${env.IMAGE_TAG}"
                 }
             }
         }
@@ -304,7 +376,7 @@ EOF
         }
 
         always {
-            echo "Pipeline execution finished. lets verify and thank u "
+            echo "Pipeline execution finished."
         }
     }
 }
