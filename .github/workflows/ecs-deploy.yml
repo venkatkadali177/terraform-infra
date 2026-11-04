@@ -1,0 +1,69 @@
+name: Build and Push ECS Image
+
+on:
+  push:
+    branches:
+      - ecs-poc
+    paths:
+      - "sample-app-source/**"
+      - ".github/workflows/ecs-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+  AWS_ACCOUNT_ID: "388439400978"
+  ECR_REPOSITORY: ecs-poc-dev
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::388439400978:role/GitHubActions-ECS-Poc-Role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Check initial image tag
+        id: initial-tag
+        shell: bash
+        run: |
+          if aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag=initial \
+            --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "push_initial=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "push_initial=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+          PUSH_INITIAL: ${{ steps.initial-tag.outputs.push_initial }}
+        run: |
+          TAG_ARGS=(-t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG")
+
+          if [ "$PUSH_INITIAL" = "true" ]; then
+            TAG_ARGS+=(-t "$ECR_REGISTRY/$ECR_REPOSITORY:initial")
+          fi
+
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            "${TAG_ARGS[@]}" \
+            ./sample-app-source
