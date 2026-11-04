@@ -93,7 +93,6 @@ resource "aws_ecs_task_definition" "this" {
     ManagedBy   = "Terraform"
   }
 }
-
 resource "aws_ecs_service" "this" {
   name            = "${var.app_name}-${var.environment}-service"
   cluster         = aws_ecs_cluster.this.id
@@ -116,6 +115,10 @@ resource "aws_ecs_service" "this" {
   depends_on = [
     aws_iam_role_policy_attachment.execution
   ]
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 
   tags = {
     Environment = var.environment

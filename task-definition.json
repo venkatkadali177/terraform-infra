@@ -1,0 +1,32 @@
+{
+  "family": "ecs-poc-dev",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::388439400978:role/ecs-poc-dev-execution-role",
+  "containerDefinitions": [
+    {
+      "name": "ecs-poc",
+      "image": "REPLACE_WITH_ECR_IMAGE",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "hostPort": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/ecs-poc-dev",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
